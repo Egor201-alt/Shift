@@ -1,6 +1,6 @@
 <div align="center">
 
-# Shift / Shift Core
+# Shift
 
 **A Rust network core for DPI evasion: TLS camouflage, adaptive traffic shaping, no static signatures.**
 
