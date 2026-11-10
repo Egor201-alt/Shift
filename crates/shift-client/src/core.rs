@@ -127,7 +127,9 @@ async fn run_connect(
     let status_frame = session
         .recv_frame(&mut server_stream)
         .await?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "early eof waiting for status"))?;
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::UnexpectedEof, "early eof waiting for status")
+        })?;
 
     let status = match status_frame.as_ref() {
         [byte] => OpenStatus::from_byte(*byte)
@@ -179,7 +181,9 @@ async fn run_udp_associate(mut client: TcpStream, pool: ConnectionPool) -> io::R
     let status_frame = session
         .recv_frame(&mut server_stream)
         .await?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "early eof waiting for status"))?;
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::UnexpectedEof, "early eof waiting for status")
+        })?;
     let status = match status_frame.as_ref() {
         [byte] => OpenStatus::from_byte(*byte)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?,
