@@ -64,6 +64,10 @@ shift-cli --server your.server:443 --server-public-key <hex> \
 
 Point any SOCKS5-aware application at `127.0.0.1:1080`.
 
+## UDP
+
+The client serves SOCKS5 UDP ASSOCIATE by default (disable with `--no-udp` or `"udp_enabled": false` in the FFI config), so DNS, QUIC, and games work through the tunnel. Each association opens one tunnel connection (`OpenRequest::Udp`); datagrams travel as length-prefixed `UdpPacket` frames with the destination address inside, domain targets are resolved server-side, and the server closes associations idle for `--udp-idle-timeout-ms` (default 300 000).
+
 ## Repository layout
 
 ```text
@@ -83,7 +87,7 @@ shift-core/
 cargo test --workspace
 ```
 
-`crates/shift-server/tests/integration.rs` spins up an echo server, a `shift-server`, and a `shift-client` in one process, and relays real traffic through the full SOCKS5 to Shift tunnel to forward path, including the TLS camouflage mode and the decoy fallback for a wrong PSK.
+`crates/shift-server/tests/integration.rs` spins up an echo server, a `shift-server`, and a `shift-client` in one process, and relays real traffic through the full SOCKS5 to Shift tunnel to forward path, including the TLS camouflage mode, a multi-megabyte burst-phase transfer (record-splitting regression), a SOCKS5 UDP ASSOCIATE roundtrip, and the decoy fallback for a wrong PSK.
 
 ## CI/CD
 

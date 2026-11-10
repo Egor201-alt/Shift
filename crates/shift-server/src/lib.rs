@@ -1,16 +1,18 @@
+pub mod capture;
 pub mod config;
 pub mod fallback;
 pub mod forwarder;
+pub mod udp;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
-use shift_proto::masquerade::{self, ParsedClientHello, RECORD_HANDSHAKE, RECORD_HEADER_LEN};
+use shift_proto::masquerade;
 use shift_proto::tunnel::{tune_socket, unix_now, Established};
 use shift_proto::{
     AdaptiveShaper, ClientInit, Host, OpenRequest, OpenStatus, ServerHandshake, Target,
@@ -18,8 +20,6 @@ use shift_proto::{
 };
 
 pub use config::{load_identity, Cli, Identity, RuntimeConfig};
-
-const MAX_CLIENT_HELLO_LEN: usize = 4096;
 
 pub async fn serve(
     listener: TcpListener,
@@ -113,9 +113,10 @@ pub async fn handle_connection_masqueraded(
 
     let mut capture = BytesMut::new();
     let (hello, consumed) =
-        match read_client_hello(&mut stream, &mut capture, runtime.handshake_timeout).await {
+        match capture::read_client_hello(&mut stream, &mut capture, runtime.handshake_timeout).await
+        {
             Ok(pair) => pair,
-            Err(FallbackNow) => {
+            Err(capture::FallbackNow) => {
                 decoy_fallback(stream, capture, None, &runtime).await;
                 return Ok(());
             }
@@ -147,7 +148,7 @@ pub async fn handle_connection_masqueraded(
     }
 
     let after_spec = consumed + masquerade::CHANGE_CIPHER_SPEC_RECORD.len();
-    if read_change_cipher_spec(
+    if capture::read_change_cipher_spec(
         &mut stream,
         &mut capture,
         consumed,
@@ -182,8 +183,9 @@ async fn decoy_fallback(
 }
 
 /// Common tail shared by both accept paths once a `Established` session is
-/// ready: read the first in-tunnel frame as an [`OpenRequest`], dial the
-/// requested (or configured) upstream, and relay.
+/// ready: read the first in-tunnel frame as an [`OpenRequest`], then dial
+/// the requested (or configured) upstream and relay — or, for
+/// [`OpenRequest::Udp`], hand the session to the UDP relay.
 async fn finish_connection(
     mut stream: TcpStream,
     peer: SocketAddr,
@@ -201,9 +203,15 @@ async fn finish_connection(
     };
     let request = OpenRequest::decode(&request_bytes)?;
 
+    if matches!(&request, OpenRequest::Udp) {
+        session.send(&mut stream, &[OpenStatus::Ok.byte()]).await?;
+        return udp::serve(stream, session, peer, runtime.udp_idle_timeout).await;
+    }
+
     let target = match &request {
         OpenRequest::Raw => DialTarget::Addr(runtime.forward),
         OpenRequest::Connect(target) => DialTarget::Named(target_to_string(target)),
+        OpenRequest::Udp => unreachable!("udp associations are handled above"),
     };
 
     let remote = match dial(target, runtime.handshake_timeout).await {
@@ -221,96 +229,6 @@ async fn finish_connection(
     tracing::info!(%peer, target = %describe(&request), "tunnel established");
     shift_proto::tunnel::relay(remote, stream, session).await?;
     Ok(())
-}
-
-/// Marker error meaning "stop trying to interpret this connection as a
-/// Shift client; hand `capture` to the decoy fallback as-is."
-struct FallbackNow;
-
-/// Reads the ClientHello record from the start of the connection. Returns
-/// its parsed fields alongside how many bytes of `capture` it
-/// occupies, so the next stage knows where to continue reading from.
-/// `capture` may end up holding a few bytes beyond that boundary already —
-/// TCP has no message framing, so a single `read_buf` can pull in the
-/// start of the next record too; every stage therefore addresses `capture`
-/// by absolute offset rather than by `capture.len()` at call time.
-async fn read_client_hello(
-    stream: &mut TcpStream,
-    capture: &mut BytesMut,
-    timeout: Duration,
-) -> Result<(ParsedClientHello, usize), FallbackNow> {
-    let read = async {
-        if !ensure_captured(stream, capture, RECORD_HEADER_LEN).await {
-            return Err(FallbackNow);
-        }
-        if capture[0] != RECORD_HANDSHAKE {
-            return Err(FallbackNow);
-        }
-        let len = u16::from_be_bytes([capture[3], capture[4]]) as usize;
-        if len == 0 || len > MAX_CLIENT_HELLO_LEN {
-            return Err(FallbackNow);
-        }
-        let total = RECORD_HEADER_LEN + len;
-        if !ensure_captured(stream, capture, total).await {
-            return Err(FallbackNow);
-        }
-        let body = &capture[RECORD_HEADER_LEN..total];
-        match masquerade::parse_client_hello(body) {
-            Ok(parsed) => Ok((parsed, total)),
-            Err(_) => Err(FallbackNow),
-        }
-    };
-    match tokio::time::timeout(timeout, read).await {
-        Ok(result) => result,
-        Err(_) => Err(FallbackNow),
-    }
-}
-
-/// Waits for the client's ChangeCipherSpec record at absolute offset
-/// `offset` within `capture`, the last step of the TLS-shaped handshake.
-/// See [`read_client_hello`] for why offsets are absolute.
-async fn read_change_cipher_spec(
-    stream: &mut TcpStream,
-    capture: &mut BytesMut,
-    offset: usize,
-    timeout: Duration,
-) -> Result<(), FallbackNow> {
-    let total = offset + masquerade::CHANGE_CIPHER_SPEC_RECORD.len();
-    let read = async {
-        if !ensure_captured(stream, capture, total).await {
-            return Err(FallbackNow);
-        }
-        if capture[offset..total] != masquerade::CHANGE_CIPHER_SPEC_RECORD[..] {
-            return Err(FallbackNow);
-        }
-        Ok(())
-    };
-    match tokio::time::timeout(timeout, read).await {
-        Ok(result) => result,
-        Err(_) => Err(FallbackNow),
-    }
-}
-
-/// Grows `capture` (appending, never discarding) until it holds at least
-/// `need_total` bytes from the start of the connection, regardless of
-/// whether the read ultimately succeeds — so a caller can always hand the
-/// exact bytes seen so far to the decoy fallback. Returns `false` on EOF
-/// or a socket error before that many bytes arrived. `capture` may end up
-/// slightly longer than `need_total`, since a single `read_buf` call can
-/// pull in more than requested when the OS has more already buffered.
-async fn ensure_captured(
-    stream: &mut TcpStream,
-    capture: &mut BytesMut,
-    need_total: usize,
-) -> bool {
-    while capture.len() < need_total {
-        capture.reserve(need_total - capture.len());
-        match stream.read_buf(capture).await {
-            Ok(0) | Err(_) => return false,
-            Ok(_) => {}
-        }
-    }
-    true
 }
 
 enum DialTarget {
@@ -345,5 +263,6 @@ fn describe(request: &OpenRequest) -> String {
     match request {
         OpenRequest::Raw => "forward".to_owned(),
         OpenRequest::Connect(target) => target.to_string(),
+        OpenRequest::Udp => "udp".to_owned(),
     }
 }

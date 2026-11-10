@@ -32,6 +32,11 @@ struct Cli {
     /// for (e.g. www.cloudflare.com). Must match what the server expects.
     #[arg(long, env = "SHIFT_CAMOUFLAGE_SNI")]
     camouflage_sni: Option<String>,
+
+    /// Disable the SOCKS5 UDP ASSOCIATE relay (DNS, QUIC); CONNECT keeps
+    /// working.
+    #[arg(long, env = "SHIFT_NO_UDP")]
+    no_udp: bool,
 }
 
 #[tokio::main]
@@ -58,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         cipher,
         connect_timeout: Duration::from_millis(cli.connect_timeout_ms),
         camouflage_sni: cli.camouflage_sni,
+        udp_enabled: !cli.no_udp,
     };
 
     let running = run_socks5(config, cli.socks_bind).await?;

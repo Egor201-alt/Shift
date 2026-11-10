@@ -30,6 +30,12 @@ struct FfiConfig {
     connect_timeout_ms: u64,
     #[serde(default)]
     camouflage_sni: Option<String>,
+    #[serde(default = "default_true")]
+    udp_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_cipher() -> String {
@@ -75,6 +81,7 @@ impl FfiConfig {
                 cipher,
                 connect_timeout: Duration::from_millis(self.connect_timeout_ms),
                 camouflage_sni: self.camouflage_sni,
+                udp_enabled: self.udp_enabled,
             },
             bind,
         ))

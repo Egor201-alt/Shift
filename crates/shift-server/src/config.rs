@@ -30,6 +30,12 @@ pub struct Cli {
     #[arg(long, env = "SHIFT_FALLBACK_DRAIN_MS", default_value_t = 1_500)]
     pub fallback_drain_ms: u64,
 
+    /// How long an in-tunnel UDP association may stay silent before the
+    /// server closes it. DNS and keepalive-style flows stay well under
+    /// this; it exists so idle associations do not pile up.
+    #[arg(long, env = "SHIFT_UDP_IDLE_TIMEOUT_MS", default_value_t = 300_000)]
+    pub udp_idle_timeout_ms: u64,
+
     /// Wrap the handshake and every frame in a fake TLS 1.3 record, preceded
     /// by a real ClientHello. See crates/shift-proto/src/masquerade.rs.
     #[arg(long, env = "SHIFT_CAMOUFLAGE")]
@@ -52,6 +58,7 @@ pub struct RuntimeConfig {
     pub fallback: SocketAddr,
     pub handshake_timeout: Duration,
     pub fallback_drain: Duration,
+    pub udp_idle_timeout: Duration,
     pub shaper: ShaperConfig,
     pub camouflage: bool,
     pub camouflage_port: u16,
@@ -67,6 +74,7 @@ impl RuntimeConfig {
             fallback: cli.fallback,
             handshake_timeout: Duration::from_millis(cli.handshake_timeout_ms),
             fallback_drain: Duration::from_millis(cli.fallback_drain_ms),
+            udp_idle_timeout: Duration::from_millis(cli.udp_idle_timeout_ms),
             shaper,
             camouflage: cli.camouflage,
             camouflage_port: cli.camouflage_port,

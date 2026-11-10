@@ -14,6 +14,7 @@ extern "C" {
  *   socks_bind          "host:port" for the local SOCKS5 server   (default "127.0.0.1:1080")
  *   connect_timeout_ms                                            (default 5000)
 *   camouflage_sni       real hostname for a decoy TLS ClientHello (default: none)
+ *   udp_enabled          serve SOCKS5 UDP ASSOCIATE through the tunnel (default true)
  *
  * Returns a positive handle on success, or a negative value on failure.
  */

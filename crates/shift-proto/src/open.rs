@@ -1,10 +1,11 @@
 use std::fmt;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::{Result, ShiftError};
 
 const KIND_RAW: u8 = 0;
 const KIND_CONNECT: u8 = 1;
+const KIND_UDP: u8 = 2;
 const ATYP_V4: u8 = 1;
 const ATYP_DOMAIN: u8 = 3;
 const ATYP_V6: u8 = 4;
@@ -99,12 +100,39 @@ impl Target {
         let port = u16::from_be_bytes(take::<2>(src, used)?);
         Ok((Target { host, port }, used + 2))
     }
+
+    pub fn from_socket_addr(addr: SocketAddr) -> Self {
+        match addr {
+            SocketAddr::V4(v4) => Target {
+                host: Host::V4(*v4.ip()),
+                port: v4.port(),
+            },
+            SocketAddr::V6(v6) => Target {
+                host: Host::V6(*v6.ip()),
+                port: v6.port(),
+            },
+        }
+    }
+
+    /// Returns the target as a socket address, or `None` when it carries a
+    /// domain name that still needs resolution.
+    pub fn to_socket_addr(&self) -> Option<SocketAddr> {
+        let ip = match &self.host {
+            Host::V4(ip) => IpAddr::V4(*ip),
+            Host::V6(ip) => IpAddr::V6(*ip),
+            Host::Domain(_) => return None,
+        };
+        Some(SocketAddr::new(ip, self.port))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenRequest {
     Raw,
     Connect(Target),
+    /// Open a UDP association: every subsequent frame on this tunnel
+    /// connection carries one [`UdpPacket`].
+    Udp,
 }
 
 impl OpenRequest {
@@ -116,6 +144,7 @@ impl OpenRequest {
                 target.encode(&mut out)?;
                 Ok(out)
             }
+            OpenRequest::Udp => Ok(vec![KIND_UDP]),
         }
     }
 
@@ -129,8 +158,43 @@ impl OpenRequest {
                 }
                 Ok(OpenRequest::Connect(target))
             }
+            Some(&KIND_UDP) if src.len() == 1 => Ok(OpenRequest::Udp),
             _ => Err(ShiftError::InvalidRequest("unknown request kind")),
         }
+    }
+}
+
+/// One UDP datagram inside the tunnel: the destination (or, on the return
+/// path, the responder) followed by a length-prefixed payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UdpPacket {
+    pub target: Target,
+    pub data: Vec<u8>,
+}
+
+impl UdpPacket {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        if self.data.len() > u16::MAX as usize {
+            return Err(ShiftError::InvalidRequest("udp payload too large"));
+        }
+        let mut out = Vec::with_capacity(4 + 16 + self.data.len());
+        self.target.encode(&mut out)?;
+        out.extend_from_slice(&(self.data.len() as u16).to_be_bytes());
+        out.extend_from_slice(&self.data);
+        Ok(out)
+    }
+
+    pub fn decode(src: &[u8]) -> Result<Self> {
+        let (target, used) = Target::decode(src)?;
+        let data_len = u16::from_be_bytes(take::<2>(src, used)?) as usize;
+        let data_start = used + 2;
+        if src.len() != data_start + data_len {
+            return Err(ShiftError::InvalidRequest("udp length mismatch"));
+        }
+        Ok(UdpPacket {
+            target,
+            data: src[data_start..].to_vec(),
+        })
     }
 }
 
@@ -175,6 +239,7 @@ mod tests {
     #[test]
     fn all_address_kinds_roundtrip() {
         roundtrip(OpenRequest::Raw);
+        roundtrip(OpenRequest::Udp);
         roundtrip(OpenRequest::Connect(Target {
             host: Host::V4(Ipv4Addr::new(93, 184, 216, 34)),
             port: 443,
@@ -187,6 +252,78 @@ mod tests {
             host: Host::Domain("example.com".into()),
             port: 8443,
         }));
+    }
+
+    #[test]
+    fn udp_packets_roundtrip_all_address_kinds() {
+        let packets = [
+            UdpPacket {
+                target: Target {
+                    host: Host::V4(Ipv4Addr::new(1, 1, 1, 1)),
+                    port: 53,
+                },
+                data: b"dns query".to_vec(),
+            },
+            UdpPacket {
+                target: Target {
+                    host: Host::V6("2606:4700::1111".parse().unwrap()),
+                    port: 53,
+                },
+                data: vec![],
+            },
+            UdpPacket {
+                target: Target {
+                    host: Host::Domain("dns.example".into()),
+                    port: 5353,
+                },
+                data: vec![0xab; 1200],
+            },
+        ];
+        for packet in packets {
+            let bytes = packet.encode().unwrap();
+            assert_eq!(UdpPacket::decode(&bytes).unwrap(), packet);
+        }
+    }
+
+    #[test]
+    fn malformed_udp_packets_are_rejected() {
+        assert!(UdpPacket::decode(&[]).is_err());
+        assert!(UdpPacket::decode(&[1, 1, 2, 3]).is_err());
+        let packet = UdpPacket {
+            target: Target {
+                host: Host::V4(Ipv4Addr::LOCALHOST),
+                port: 53,
+            },
+            data: b"xyz".to_vec(),
+        };
+        let mut bytes = packet.encode().unwrap();
+        // Truncated tail.
+        bytes.pop();
+        assert!(UdpPacket::decode(&bytes).is_err());
+        // Trailing garbage.
+        bytes.push(0);
+        assert!(UdpPacket::decode(&bytes).is_err());
+        let mut huge = packet;
+        huge.data = vec![0u8; u16::MAX as usize + 1];
+        assert!(huge.encode().is_err());
+    }
+
+    #[test]
+    fn socket_addr_conversions() {
+        let v4: SocketAddr = "127.0.0.1:1080".parse().unwrap();
+        let target = Target::from_socket_addr(v4);
+        assert_eq!(target.host, Host::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(target.to_socket_addr(), Some(v4));
+
+        let v6: SocketAddr = "[2001:db8::1]:443".parse().unwrap();
+        let target = Target::from_socket_addr(v6);
+        assert_eq!(target.to_socket_addr(), Some(v6));
+
+        let domain = Target {
+            host: Host::Domain("example.com".into()),
+            port: 80,
+        };
+        assert_eq!(domain.to_socket_addr(), None);
     }
 
     #[test]

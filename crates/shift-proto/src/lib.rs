@@ -18,7 +18,7 @@ pub use handshake::{
     CLIENT_INIT_LEN, SERVER_REPLY_LEN,
 };
 pub use morphing::{AdaptiveShaper, FramePlan, Phase, ShaperConfig, SizeBucket, SizeProfile};
-pub use open::{Host, OpenRequest, OpenStatus, Target};
+pub use open::{Host, OpenRequest, OpenStatus, Target, UdpPacket};
 pub use resumption::{unix_now, Ticket, TicketStore, TICKET_ID_LEN};
 
 pub const PROTOCOL_VERSION: u8 = 1;
