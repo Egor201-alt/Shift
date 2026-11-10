@@ -25,7 +25,11 @@ pub async fn serve(
 ) -> anyhow::Result<()> {
     // Match the socket family to the client's so replies to IPv6 targets
     // are possible; all outbound targets share this one socket (NAT-style).
-    let bind_addr = if peer.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+    let bind_addr = if peer.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    };
     let socket = UdpSocket::bind(bind_addr).await?;
     tracing::info!(%peer, "udp tunnel established");
 

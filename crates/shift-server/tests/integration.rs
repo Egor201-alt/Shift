@@ -173,7 +173,12 @@ async fn wrong_psk_falls_back_instead_of_reaching_forward() {
 
     let server_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server_addr = server_listener.local_addr().unwrap();
-    let runtime_cfg = Arc::new(runtime_config(server_addr, real_forward, fallback_addr, false));
+    let runtime_cfg = Arc::new(runtime_config(
+        server_addr,
+        real_forward,
+        fallback_addr,
+        false,
+    ));
     tokio::spawn(serve(server_listener, runtime_cfg, handshake));
 
     let socks_addr = spawn_socks_client(server_addr, server_public_key, "wrong-guess", None).await;

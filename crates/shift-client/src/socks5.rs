@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{SocketAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -78,9 +78,7 @@ pub async fn read_request(stream: &mut TcpStream) -> io::Result<SocksRequest> {
         ));
     }
     match header[1] {
-        CMD_CONNECT => Ok(SocksRequest::Connect(
-            read_target(stream, header[3]).await?,
-        )),
+        CMD_CONNECT => Ok(SocksRequest::Connect(read_target(stream, header[3]).await?)),
         CMD_UDP_ASSOCIATE => {
             // The requested address only tells us where the app plans to
             // send from; read and discard it to keep the stream in sync.
@@ -228,7 +226,13 @@ mod tests {
         assert!(matches!(target.host, Host::V6(_)));
         assert_eq!(data, b"");
 
-        let mut datagram = udp_header(ATYP_DOMAIN, &[11, b'e', b'x', b'a', b'm', b'p', b'l', b'e', b'.', b'o', b'r', b'g'], 53);
+        let mut datagram = udp_header(
+            ATYP_DOMAIN,
+            &[
+                11, b'e', b'x', b'a', b'm', b'p', b'l', b'e', b'.', b'o', b'r', b'g',
+            ],
+            53,
+        );
         datagram.push(0xaa);
         let (target, data) = parse_udp_datagram(&datagram).unwrap();
         assert_eq!(target.host, Host::Domain("example.org".into()));

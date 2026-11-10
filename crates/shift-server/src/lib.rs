@@ -112,15 +112,19 @@ pub async fn handle_connection_masqueraded(
     tune_socket(&stream)?;
 
     let mut capture = BytesMut::new();
-    let (hello, consumed) =
-        match capture::read_client_hello(&mut stream, &mut capture, runtime.handshake_timeout).await
-        {
-            Ok(pair) => pair,
-            Err(capture::FallbackNow) => {
-                decoy_fallback(stream, capture, None, &runtime).await;
-                return Ok(());
-            }
-        };
+    let (hello, consumed) = match capture::read_client_hello(
+        &mut stream,
+        &mut capture,
+        runtime.handshake_timeout,
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(capture::FallbackNow) => {
+            decoy_fallback(stream, capture, None, &runtime).await;
+            return Ok(());
+        }
+    };
 
     let Some(init) = hello.client_init() else {
         decoy_fallback(stream, capture, hello.server_name.as_deref(), &runtime).await;

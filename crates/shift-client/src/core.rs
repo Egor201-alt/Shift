@@ -12,8 +12,8 @@ use shift_proto::{CipherSuite, OpenRequest, OpenStatus, Psk, Target, UdpPacket};
 
 use crate::pool::ConnectionPool;
 use crate::socks5::{
-    encode_udp_header, parse_udp_datagram, read_request, reply_bound, reply_failure,
-    reply_success, Socks5Listener, SocksRequest,
+    encode_udp_header, parse_udp_datagram, read_request, reply_bound, reply_failure, reply_success,
+    Socks5Listener, SocksRequest,
 };
 
 /// Headroom for a SOCKS5 UDP datagram: RFC 1928 header (≤ 3 + 2 + 255 + 2)
@@ -101,9 +101,7 @@ async fn handle_socks_client(
 ) -> std::io::Result<()> {
     match read_request(&mut client).await? {
         SocksRequest::Connect(target) => run_connect(client, pool, target).await,
-        SocksRequest::UdpAssociate if config.udp_enabled => {
-            run_udp_associate(client, pool).await
-        }
+        SocksRequest::UdpAssociate if config.udp_enabled => run_udp_associate(client, pool).await,
         SocksRequest::UdpAssociate => {
             reply_failure(&mut client).await?;
             Err(io::Error::new(
@@ -114,7 +112,11 @@ async fn handle_socks_client(
     }
 }
 
-async fn run_connect(mut client: TcpStream, pool: ConnectionPool, target: Target) -> io::Result<()> {
+async fn run_connect(
+    mut client: TcpStream,
+    pool: ConnectionPool,
+    target: Target,
+) -> io::Result<()> {
     let (mut server_stream, mut session) = pool.acquire().await?;
 
     let request = OpenRequest::Connect(target.clone())
@@ -125,12 +127,7 @@ async fn run_connect(mut client: TcpStream, pool: ConnectionPool, target: Target
     let status_frame = session
         .recv_frame(&mut server_stream)
         .await?
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "early eof waiting for status",
-            )
-        })?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "early eof waiting for status"))?;
 
     let status = match status_frame.as_ref() {
         [byte] => OpenStatus::from_byte(*byte)
@@ -182,12 +179,7 @@ async fn run_udp_associate(mut client: TcpStream, pool: ConnectionPool) -> io::R
     let status_frame = session
         .recv_frame(&mut server_stream)
         .await?
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "early eof waiting for status",
-            )
-        })?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "early eof waiting for status"))?;
     let status = match status_frame.as_ref() {
         [byte] => OpenStatus::from_byte(*byte)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?,
