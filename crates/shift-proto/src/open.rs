@@ -297,12 +297,13 @@ mod tests {
             data: b"xyz".to_vec(),
         };
         let mut bytes = packet.encode().unwrap();
-        // Truncated tail.
-        bytes.pop();
-        assert!(UdpPacket::decode(&bytes).is_err());
         // Trailing garbage.
         bytes.push(0);
         assert!(UdpPacket::decode(&bytes).is_err());
+        // Truncated tail.
+        let mut truncated = packet.encode().unwrap();
+        truncated.pop();
+        assert!(UdpPacket::decode(&truncated).is_err());
         let mut huge = packet;
         huge.data = vec![0u8; u16::MAX as usize + 1];
         assert!(huge.encode().is_err());
