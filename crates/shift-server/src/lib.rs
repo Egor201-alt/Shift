@@ -54,7 +54,7 @@ pub async fn handle_connection_plain(
     let mut init_buf = BytesMut::with_capacity(CLIENT_INIT_LEN);
     let filled = tokio::time::timeout(
         runtime.handshake_timeout,
-        ensure_captured(&mut stream, &mut init_buf, CLIENT_INIT_LEN),
+        capture::ensure_captured(&mut stream, &mut init_buf, CLIENT_INIT_LEN),
     )
     .await;
     if !matches!(filled, Ok(true)) {

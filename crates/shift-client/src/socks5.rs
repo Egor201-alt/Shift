@@ -87,10 +87,10 @@ pub async fn read_request(stream: &mut TcpStream) -> io::Result<SocksRequest> {
         }
         _ => {
             reply(stream, REPLY_COMMAND_NOT_SUPPORTED).await?;
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "only CONNECT and UDP ASSOCIATE are supported",
-            ));
+            ))
         }
     }
 }
